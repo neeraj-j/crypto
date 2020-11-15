@@ -1,0 +1,42 @@
+# @package _group_
+AUTO_RESUME: true
+CUDNN:
+  BENCHMARK: true
+  DETERMINISTIC: false
+  ENABLED: true
+DATA_DIR: ''
+GPUS: (0,)
+OUTPUT_DIR: 'output'
+LOG_DIR: 'log'
+WORKERS: 4
+PRINT_FREQ: 100
+SEED: 1
+MODEL:
+    NAME: "wav2vec"
+    # # '[(512, 10, 5)] + [(512, 3, 2)] * 4 + [(512,2,2)] * 2'
+    ENCODER: " [(512,10,5)] + [(512, 3, 2)]*2 "    #input channel =1
+    DECODER: " [(512,3,2)]*2 + [(1,10,5)] " 
+    BLOCK: "CBR"
+    GROUPED: false
+    LOG_COMPRESSION: false
+DATASET:
+    ROOT: "../data/manifest"
+    DATASET: "libridev"
+    SKIP_INVALID_SIZE_INPUTS_VALID_TEST: false
+    SAMPLE_RATE: 16000
+    MAX_TOKENS: 1500000
+    MAX_SAMPLE_SIZE: 150000
+    MIN_SAMPLE_SIZE: 0
+    NORMALIZE: True
+    TRAIN_SET: "train"
+    VALID_SET: "valid"
+TRAIN:
+    BEGIN_EPOCH: 0
+    END_EPOCH: 400000
+    SHUFFLE: true
+    BATCH_SIZE: 16
+    LR: 1e-06
+    MIN_LR: 1e-09 
+    MAX_LR: 0.005 
+    OPTIMIZER: "adam"
+    SCHEDULER: "cosine"
