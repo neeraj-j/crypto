@@ -14,19 +14,6 @@ import torch.nn.functional as F
 
 logger = logging.getLogger(__name__)
 
-class Fp32GroupNorm(nn.GroupNorm):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-    def forward(self, input):
-         output = F.group_norm(
-                 input.float(),
-                 self.num_groups,
-                 self.weight.float() if self.weight is not None else None,
-                 self.bias.float() if self.bias is not None else None,
-                 self.eps,
-                 )
-         return output.type_as(input)
 
 class ConvBNReLU(nn.Sequential):
     def __init__(self, in_planes, out_planes, kernel_size, stride, padding=0, bias=False, momentum=0.1, groups=1):
@@ -44,29 +31,13 @@ class ConvTBNReLU(nn.Sequential):
             nn.ReLU(inplace=True)
         )
 
-
-class ConvReLU(nn.Sequential):
+class ConvBN(nn.Sequential):
     def __init__(self, in_planes, out_planes, kernel_size, stride, padding=0, bias=False, momentum=0.1, groups=1):
-        super(ConvReLU, self).__init__(
+        super(ConvBN, self).__init__(
             nn.Conv1d(in_planes, out_planes, kernel_size, stride, padding, bias=bias, groups=groups),
-            nn.ReLU(inplace=True)
-            )
-
-class ConvGNReLU(nn.Sequential):
-    def __init__(self, in_planes, out_planes, kernel_size, stride, padding=0, bias=False, affine=True, groups=1):
-        super(ConvGNReLU, self).__init__(
-            nn.Conv1d(in_planes, out_planes, kernel_size, stride, padding, bias=bias, groups=groups),
-            nn.GroupNorm(1, out_planes, affine=affine),
-            nn.ReLU(inplace=True)
+            nn.BatchNorm1d(out_planes, momentum=momentum),
         )
 
-class ConvTGNReLU(nn.Sequential):
-    def __init__(self, in_planes, out_planes, kernel_size, stride, padding=0, bias=False, affine=True, groups=1):
-        super(ConvTGNReLU, self).__init__(
-            nn.Conv1d(in_planes, out_planes, kernel_size, stride, padding, bias=bias, groups=groups),
-            nn.GroupNorm(1, out_planes, affine=affine),
-            nn.ReLU(inplace=True)
-        )
 
 class ConvTBase(nn.Sequential):
     def __init__(self, in_planes, out_planes, kernel_size, stride, padding=0, bias=False, momentum=0.1, groups=1):
@@ -81,27 +52,53 @@ class ConvBase(nn.Sequential):
         )
 
 
-enc_blocks = {"BASIC": ConvBase, "CBR": ConvBNReLU, "CGR":ConvGNReLU}
-dec_blocks = {"BASIC": ConvTBase, "CBR": ConvTBNReLU, "CGR":ConvTGNReLU}
+class Bottleneck(nn.Module):
+    expansion: int = 1
 
-class Wav2VecModel(nn.Module):
+    def __init__( self, inplanes, planes, kernel_size, stride, padding=0, bias=False):
+        super(Bottleneck, self).__init__()
+        width = int(planes / self.expansion) 
+        # Both self.conv2 and self.downsample layers downsample the input when stride != 1
+        self.conv1 = ConvBNReLU(inplanes, width, 1,1)
+        self.conv2 = ConvBNReLU(width, width, kernel_size,stride, padding)
+        self.conv3 = ConvBN(width, planes, 1,1) #convBN if relu
+        self.relu = nn.ReLU(inplace=True)
+        if stride !=1 or inplanes !=planes*self.expansion:
+            self.downsample = ConvBN(inplanes, planes, 1,stride)
+        else:
+            self.downsample = nn.Identity()
+
+    def forward(self, x):
+        out = self.conv1(x)
+        out = self.conv2(x)
+        out = self.conv3(out)
+        identity = self.downsample(x)
+        out += identity[:,:,:out.shape[2]]
+        out = self.relu(out)
+        return out
+
+
+enc_blocks = {"BASIC": ConvBase, "CBR": ConvBNReLU, "BOT":Bottleneck }
+dec_blocks = {"BASIC": ConvTBase, "CBR": ConvTBNReLU,}
+
+class Res2WavModel(nn.Module):
     def __init__(self, cfg):
         super().__init__()
 
         feature_enc_layers = eval(cfg.MODEL.ENCODER)
         grouped = cfg.MODEL.GROUPED
+        dim, k, stride = feature_enc_layers[0]
+        self.first_layer = ConvBNReLU(1,dim, k,stride) 
         self.encoder = Encoder(
-            feature_enc_layers,
+            feature_enc_layers[1:],
             cfg.MODEL.BLOCK,
-            grouped,
-            #log_compression=cfg.MODEL.LOG_COMPRESSION,
-            rand=cfg.MODEL.RAND,
+            dim,
         )
 
         feature_dec_layers = eval(cfg.MODEL.DECODER)
         self.decoder = Decoder(
                 feature_dec_layers[:-1],
-            cfg.MODEL.BLOCK,
+            "CBR",
             grouped,
             self.encoder.in_d
         )
@@ -115,7 +112,8 @@ class Wav2VecModel(nn.Module):
     def forward(self, source):
 
         source = source.unsqueeze(1)
-        features = self.encoder(source)
+        features = self.first_layer(source)
+        features = self.encoder(features)
 
         x = self.decoder(features)
         x = self.final_layer(x)
@@ -151,39 +149,23 @@ class Encoder(nn.Module):
         self,
         conv_layers,
         block_name,
-        grouped,
-        rand
+        in_d,
     ):
         super().__init__()
 
-        self.in_d = 1
+        self.in_d = in_d
         self.conv_layers = nn.ModuleList()
         block = enc_blocks[block_name] 
         for dim, k, stride in conv_layers:
-            grp = self.in_d if grouped else 1
-            self.conv_layers.append(block(self.in_d, dim, k, stride, groups=grp))
+            pad = 1 if stride == 1 else 0
+            self.conv_layers.append(block(self.in_d, dim, k, stride, pad))
             self.in_d = dim
-
-        #self.log_compression = log_compression
-        self.log_compression = False
-        self.rand = rand
 
     def forward(self, x):
         # BxT -> BxCxT
 
         for conv in self.conv_layers:
             x = conv(x)
-
-        if self.log_compression:
-            x = x.abs()
-            x = x + 1
-            x = x.log()
-
-        eps = torch.randn_like(x)
-        if self.rand == 'mul':
-            x = x*eps
-        elif self.rand =='sum':
-            x = x+eps
 
         return x
 
@@ -215,7 +197,7 @@ class Decoder(nn.Module):
 
 
 def get_wav2vec(cfg, is_train=False):
-    model = Wav2VecModel(cfg)
+    model = Res2WavModel(cfg)
     #if is_train :
     #    model.init_weights()
 

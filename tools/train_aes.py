@@ -24,8 +24,8 @@ import torchvision.transforms as transforms
 import _init_paths
 from config import cfg
 from config import update_config
-from core.function import train
-from core.function import validate
+from core.function_aes import train
+from core.function_aes import validate
 from utils.utils import get_optimizer
 from utils.utils import save_checkpoint
 from utils.utils import create_logger
@@ -90,6 +90,7 @@ def main():
         cfg, is_train=True
     )
 
+    print(model)
     # copy model file
     this_dir = os.path.dirname(__file__)
     shutil.copy2(
@@ -107,28 +108,30 @@ def main():
     # define loss function (criterion) and optimizer
     if cfg.MODEL.LOSS:
         criterion = model.loss_function
-    else:
+    else :
         criterion = nn.MSELoss(reduction = 'mean').cuda()
 
-    manifest = os.path.join(cfg.DATASET.ROOT,"{}.tsv".format("train"))
-    train_dataset = dataset.FileAudioDataset(
+    manifest = os.path.join(cfg.DATASET.ROOT,"{}.tsv".format("train_aes"))
+    train_dataset = dataset.AesFileAudioDataset(
             manifest, 
             sample_rate=cfg.DATASET.SAMPLE_RATE,
             max_sample_size=cfg.DATASET.MAX_SAMPLE_SIZE,
-            min_sample_size=cfg.DATASET.MAX_SAMPLE_SIZE,
+            min_sample_size=cfg.DATASET.MIN_SAMPLE_SIZE,
             min_length=cfg.DATASET.MIN_SAMPLE_SIZE,
             pad=False,
             normalize=cfg.DATASET.NORMALIZE,
+            aes=True,
             )
-    manifest = os.path.join(cfg.DATASET.ROOT,"{}.tsv".format("valid"))
-    valid_dataset = dataset.FileAudioDataset(
+    manifest = os.path.join(cfg.DATASET.ROOT,"{}.tsv".format("valid_aes"))
+    valid_dataset = dataset.AesFileAudioDataset(
             manifest, 
             sample_rate=cfg.DATASET.SAMPLE_RATE,
             max_sample_size=cfg.DATASET.MAX_SAMPLE_SIZE,
-            min_sample_size=cfg.DATASET.MAX_SAMPLE_SIZE,
+            min_sample_size=cfg.DATASET.MIN_SAMPLE_SIZE,
             min_length=cfg.DATASET.MIN_SAMPLE_SIZE,
             pad=False,
             normalize=cfg.DATASET.NORMALIZE,
+            aes=True,
             )
 
     train_loader = torch.utils.data.DataLoader(

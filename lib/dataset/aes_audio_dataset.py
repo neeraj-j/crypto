@@ -26,7 +26,7 @@ class RawAudioDataset(torch.utils.data.Dataset):
         shuffle=True,
         min_length=0,
         pad=False,
-        normalize=False,
+        normalize=True,
         aes=False,
     ):
         super().__init__()
@@ -62,31 +62,29 @@ class RawAudioDataset(torch.utils.data.Dataset):
 
         assert feats.dim() == 1, feats.dim()
 
-        if self.normalize and not self.aes:
+        if self.normalize:
             with torch.no_grad():
                 feats = F.layer_norm(feats, feats.shape)
-        if self.aes:
-            # normalize from 0-255
-            feats = (feats - feats.min()) * (255/(feats.max() - feats.min()))
-            feats = feats.round()
         return feats
 
-    def crop_to_max_size(self, wav, target_size):
-        size = len(wav)
+    def crop_to_max_size(self, wav1, wav2, target_size):
+        size = len(wav1)
         diff = size - target_size
         if diff <= 0:
-            return wav
+            return wav1, wav2
 
         start = np.random.randint(0, diff + 1)
         end = size - diff + start
-        return wav[start:end]
+        return (wav1[start:end], wav2[start:end])
 
     def collater(self, samples):
         samples = [s for s in samples if s["source"] is not None]
+        aes_samples = [s for s in samples if s["aes_source"] is not None]
         if len(samples) == 0:
             return {}
 
         sources = [s["source"] for s in samples]
+        aes_sources = [s["aes_source"] for s in aes_samples]
         sizes = [len(s) for s in sources]
 
         if self.pad:
@@ -102,8 +100,7 @@ class RawAudioDataset(torch.utils.data.Dataset):
             target_size = target_size - (target_size %160)
 
         collated_sources = sources[0].new_zeros(len(sources), target_size)
-        aes_sources = sources[0].new_zeros(len(sources), target_size)
-        aes_sources = aes_sources.numpy()
+        aes_collated = sources[0].new_zeros(len(sources), target_size)
         padding_mask = (
             torch.BoolTensor(collated_sources.shape).fill_(False) if self.pad else None
         )
@@ -118,16 +115,10 @@ class RawAudioDataset(torch.utils.data.Dataset):
                 )
                 padding_mask[i, diff:] = True
             else:
-                collated_sources[i] = self.crop_to_max_size(source, target_size)
-
-            if self.aes:   # AES encrypt the data
-                _,_,aes_sources[i] = self.moo.encrypt(collated_sources[i].numpy().astype(int), self.moo.modeOfOperation["CBC"], self.key, self.moo.aes.keySize["SIZE_128"], self.iv)
-                #normalize -0.5 to 0.5
-                aes_sources[i] = aes_sources[i]/255.0 - 0.5
-                collated_sources[i] = collated_sources[i]/255.0 - 0.5
+                collated_sources[i], aes_collated[i] = self.crop_to_max_size(source, aes_sources[i], target_size)
 
 
-        input = {"source": collated_sources, "aes":torch.from_numpy(aes_sources)}
+        input = {"source": collated_sources, "aes":aes_collated}
         if self.pad:
             input["padding_mask"] = padding_mask
         return {"id": torch.LongTensor([s["id"] for s in samples]), "net_input": input}
@@ -154,8 +145,8 @@ class RawAudioDataset(torch.utils.data.Dataset):
         order.append(self.sizes)
         return np.lexsort(order)[::-1]
 
-
-class FileAudioDataset(RawAudioDataset):
+# loading data from regular and aes files
+class AesFileAudioDataset(RawAudioDataset):
     def __init__(
         self,
         manifest_path,
@@ -165,7 +156,7 @@ class FileAudioDataset(RawAudioDataset):
         shuffle=True,
         min_length=0,
         pad=False,
-        normalize=False,
+        normalize=True,
         aes=False
     ):
         super().__init__(
@@ -200,6 +191,13 @@ class FileAudioDataset(RawAudioDataset):
 
         fname = os.path.join(self.root_dir, self.fnames[index])
         wav, curr_sample_rate = sf.read(fname)
+        aes_fname = fname.replace(".flac", "-aes.flac")
+        aes, curr_sample_rate = sf.read(aes_fname)
+        # from -0.5 - 0.5 tp -2.0 - 2.0
+        wav *=4
+        aes *=4
         feats = torch.from_numpy(wav).float()
+        aes_feats = torch.from_numpy(aes).float()
         feats = self.postprocess(feats, curr_sample_rate)
-        return {"id": index, "source": feats}
+        aes_feats = self.postprocess(aes_feats, curr_sample_rate)
+        return {"id": index, "source": feats, "aes_source": aes_feats}

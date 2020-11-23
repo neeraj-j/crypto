@@ -62,13 +62,9 @@ class RawAudioDataset(torch.utils.data.Dataset):
 
         assert feats.dim() == 1, feats.dim()
 
-        if self.normalize and not self.aes:
+        if self.normalize:
             with torch.no_grad():
                 feats = F.layer_norm(feats, feats.shape)
-        if self.aes:
-            # normalize from 0-255
-            feats = (feats - feats.min()) * (255/(feats.max() - feats.min()))
-            feats = feats.round()
         return feats
 
     def crop_to_max_size(self, wav, target_size):
@@ -102,8 +98,6 @@ class RawAudioDataset(torch.utils.data.Dataset):
             target_size = target_size - (target_size %160)
 
         collated_sources = sources[0].new_zeros(len(sources), target_size)
-        aes_sources = sources[0].new_zeros(len(sources), target_size)
-        aes_sources = aes_sources.numpy()
         padding_mask = (
             torch.BoolTensor(collated_sources.shape).fill_(False) if self.pad else None
         )
@@ -121,13 +115,10 @@ class RawAudioDataset(torch.utils.data.Dataset):
                 collated_sources[i] = self.crop_to_max_size(source, target_size)
 
             if self.aes:   # AES encrypt the data
-                _,_,aes_sources[i] = self.moo.encrypt(collated_sources[i].numpy().astype(int), self.moo.modeOfOperation["CBC"], self.key, self.moo.aes.keySize["SIZE_128"], self.iv)
-                #normalize -0.5 to 0.5
-                aes_sources[i] = aes_sources[i]/255.0 - 0.5
-                collated_sources[i] = collated_sources[i]/255.0 - 0.5
+                _,_,collated_sources[i] = self.moo.encrypt(collated_sources[i], self.moo.modeOfOperation["CBC"], self.key, self.moo.aes.keySize["SIZE_128"], self.iv)
 
 
-        input = {"source": collated_sources, "aes":torch.from_numpy(aes_sources)}
+        input = {"source": collated_sources}
         if self.pad:
             input["padding_mask"] = padding_mask
         return {"id": torch.LongTensor([s["id"] for s in samples]), "net_input": input}

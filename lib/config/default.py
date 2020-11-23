@@ -41,6 +41,7 @@ _C.MODEL.DECODER = ''
 _C.MODEL.BLOCK = 'BASIC'
 _C.MODEL.GROUPED = False 
 _C.MODEL.LOG_COMPRESSION = False 
+_C.MODEL.RAND = "" 
 _C.MODEL.HIDDEN_DIMS = 0   # output dim of encoder
 _C.MODEL.LATENT_DIMS = 0  # same as max_sample_size
 _C.MODEL.LOSS = False  # same as max_sample_size

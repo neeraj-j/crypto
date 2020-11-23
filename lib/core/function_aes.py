@@ -37,7 +37,8 @@ def train(config, train_loader, model, criterion, optimizer, epoch,
         #with torch.cuda.amp.autocast():
         data_time.update(time.time() - end)
         sample = samples["net_input"]["source"].cuda()
-        output = model(sample)
+        aes_sample = samples["net_input"]["aes"].cuda()
+        output = model(aes_sample)
         # Vae encoder
         if isinstance(output, list):
             recon, enc, mu, log_var = output
@@ -55,7 +56,6 @@ def train(config, train_loader, model, criterion, optimizer, epoch,
         # compute gradient and do update step
         #loss.backward(torch.ones_like(loss))
         with amp.scale_loss(loss, optimizer) as scaled_loss:
-            #scaled_loss.backward(torch.ones_like(loss))
             scaled_loss.backward(loss)
 
         #scaler.scale(loss).backward()
@@ -64,6 +64,7 @@ def train(config, train_loader, model, criterion, optimizer, epoch,
         lr_scheduler.step()
         # measure accuracy and record loss
         losses.update(loss.item(), sample.size(0))
+        # mse of 1 sample
 
         # measure elapsed time
         batch_time.update(time.time() - end)
@@ -78,7 +79,7 @@ def train(config, train_loader, model, criterion, optimizer, epoch,
                   'Loss {loss.val:.5f} ({loss.avg:.5f})'.format(
                       epoch, i, len(train_loader), batch_time=batch_time,
                       speed=sample.size(0)/batch_time.val,
-                      LR=lr_scheduler.get_last_lr()[0],
+                      LR=lr_scheduler.get_last_lr()[0], 
                       data_time=data_time, loss=losses)
             logger.info(msg)
 
@@ -86,6 +87,7 @@ def train(config, train_loader, model, criterion, optimizer, epoch,
 def validate(config, val_loader, val_dataset, model, criterion, output_dir, device=torch.device("cuda:0")):
     batch_time = AverageMeter()
     losses = AverageMeter()
+    mse = AverageMeter()
 
     # switch to evaluate mode
     model.eval()
@@ -97,7 +99,8 @@ def validate(config, val_loader, val_dataset, model, criterion, output_dir, devi
         for i, samples in enumerate(val_loader):
             # compute output
             sample = samples["net_input"]["source"].to(device)
-            output = model(sample)
+            aes_sample = samples["net_input"]["aes"].cuda()
+            output = model(aes_sample)
             # Vae encoder
             if isinstance(output, list):
                 recon, enc, mu, log_var = output
@@ -113,6 +116,7 @@ def validate(config, val_loader, val_dataset, model, criterion, output_dir, devi
             num_samples = sample.size(0)
             # measure accuracy and record loss
             losses.update(loss.item(), num_samples)
+            mse.update(output[0].square().mean().item(), 1)
 
             # measure elapsed time
             batch_time.update(time.time() - end)
@@ -121,9 +125,10 @@ def validate(config, val_loader, val_dataset, model, criterion, output_dir, devi
             if i % config.PRINT_FREQ == 0:
                 msg = 'Test: [{0}/{1}]\t' \
                       'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t' \
+                      'MSE: {mse.avg:.3f} \t' \
                       'Loss {loss.val:.4f} ({loss.avg:.4f})'.format(
                           i, len(val_loader), batch_time=batch_time,
-                          loss=losses)
+                          mse=mse, loss=losses)
                 logger.info(msg)
 
     return losses.avg
